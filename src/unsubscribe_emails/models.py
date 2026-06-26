@@ -19,8 +19,10 @@ class UnsubscribeRecord:
     recipientEmail: str
     subject: str
     unsubscribeUrl: str | None = None
+    unsubscribeUrlFallback: str | None = None
     unsubscribeMailto: str | None = None
     unsubscribeSource: str | None = None
+    oneClick: bool = False
     createdAt: str | None = None
     completedAt: str | None = None
     reviewedAt: str | None = None
@@ -31,8 +33,10 @@ class UnsubscribeRecord:
     def from_dict(cls, data: dict[str, Any]) -> "UnsubscribeRecord":
         values = dict(data)
         values.setdefault("unsubscribeUrl", None)
+        values.setdefault("unsubscribeUrlFallback", None)
         values.setdefault("unsubscribeMailto", None)
         values.setdefault("unsubscribeSource", None)
+        values["oneClick"] = bool(values.get("oneClick", False))
         values.setdefault("createdAt", None)
         values.setdefault("completedAt", None)
         values.setdefault("reviewedAt", None)
@@ -57,8 +61,10 @@ class UnsubscribeRecord:
             "recipientEmail": self.recipientEmail,
             "subject": self.subject,
             "unsubscribeUrl": self.unsubscribeUrl,
+            "unsubscribeUrlFallback": self.unsubscribeUrlFallback,
             "unsubscribeMailto": self.unsubscribeMailto,
             "unsubscribeSource": self.unsubscribeSource,
+            "oneClick": self.oneClick,
             "createdAt": self.createdAt,
             "completedAt": self.completedAt,
             "reviewedAt": self.reviewedAt,
@@ -75,6 +81,7 @@ class UnsubscribeRecord:
             "recipientEmail": self.recipientEmail,
             "gmailUrl": self.gmailUrl,
             "unsubscribeUrl": self.unsubscribeUrl,
+            "unsubscribeUrlFallback": self.unsubscribeUrlFallback,
             "attempts": self.attempts,
         }
 

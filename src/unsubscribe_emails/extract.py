@@ -79,6 +79,11 @@ def parse_list_unsubscribe(header_value: str | None) -> tuple[str | None, str | 
     return (urls[0] if urls else None, mailtos[0] if mailtos else None)
 
 
+def supports_one_click(header_value: str | None) -> bool:
+    """True when the RFC 8058 ``List-Unsubscribe-Post`` header opts into one-click."""
+    return "one-click" in str(header_value or "").lower()
+
+
 def extract_body_unsubscribe_link(message: Message) -> str | None:
     candidates: list[tuple[int, str]] = []
     for part in _iter_text_parts(message):
@@ -113,9 +118,13 @@ def build_record_from_message(
     recipient_email = choose_recipient(to_emails, known_recipient_emails)
     subject = str(message.get("Subject") or "")
     header_url, mailto = parse_list_unsubscribe(message.get("List-Unsubscribe"))
-    body_url = None if header_url else extract_body_unsubscribe_link(message)
+    body_url = extract_body_unsubscribe_link(message)
     unsubscribe_url = header_url or body_url
     source = "list-unsubscribe" if header_url else ("body" if body_url else None)
+    # When a header link exists, keep a distinct body link as a fallback to try
+    # if the header link errors out (expired token, POST-only endpoint, etc.).
+    fallback_url = body_url if (header_url and body_url and body_url != header_url) else None
+    one_click = bool(header_url) and supports_one_click(message.get("List-Unsubscribe-Post"))
     timestamp = now_iso()
 
     return UnsubscribeRecord(
@@ -132,8 +141,10 @@ def build_record_from_message(
         recipientEmail=recipient_email,
         subject=subject,
         unsubscribeUrl=unsubscribe_url,
+        unsubscribeUrlFallback=fallback_url,
         unsubscribeMailto=mailto,
         unsubscribeSource=source,
+        oneClick=one_click,
         createdAt=timestamp,
     )
 
