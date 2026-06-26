@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 from unsubscribe_emails.models import UnsubscribeRecord
@@ -138,7 +139,7 @@ def test_ignore_sender_is_case_insensitive_and_removes_open_records(tmp_path, mo
     assert state.review == []
 
 
-def test_report_filters_recent_done_and_includes_review_links(tmp_path, monkeypatch):
+def test_report_merges_done_and_orders_sections(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     now = datetime.now(timezone.utc).replace(microsecond=0)
     recent = make_record("recent", subject="Recent Done")
@@ -160,9 +161,18 @@ def test_report_filters_recent_done_and_includes_review_links(tmp_path, monkeypa
     report_path = write_report()
     html = report_path.read_text(encoding="utf-8")
 
-    recent_section = html.split("Needs Manual Review")[0]
-    assert "Recent Done" in recent_section
-    assert "Old Done" not in recent_section
+    # The 7-day cutoff is gone: both done entries appear in one merged list,
+    # newest first.
+    assert "Recent Done" in html
+    assert "Old Done" in html
+    assert html.index("Recent Done") < html.index("Old Done")
+    # Sections run review -> pending -> unsubscribed -> ignored.
+    assert (
+        html.index("Needs Manual Review")
+        < html.index("Pending")
+        < html.index("Unsubscribed")
+        < html.index("Ignored")
+    )
     assert "Needs Help" in html
     assert "/ignore?sender=news%40example.com" in html
     assert html.index("a@example.com") < html.index("z@example.com")
@@ -185,16 +195,18 @@ def test_report_shows_pending_retries_and_honest_summary(tmp_path, monkeypatch):
 
     html = write_report().read_text(encoding="utf-8")
 
-    pending_section = html.split("Pending / Retrying")[1].split("</section>")[0]
+    pending_section = html.split(">Pending")[1].split("</section>")[0]
     assert "Retry One" in pending_section
-    # Only the first line of the error is shown, and fresh (untried) rows stay out.
+    # Only the first line of the error is shown.
     assert "page returned HTTP 405" in pending_section
     assert "Call log" not in pending_section
-    assert "Fresh One" not in pending_section
-    # Summary reflects the true split: 1 done / 1 pending / 1 untried -> 33%.
+    # Untried entries now belong in pending too.
+    assert "Fresh One" in pending_section
+    # Summary is review/pending/done only, no percentage. Both todo entries
+    # count as pending.
     summary = html.split('class="summary">')[1].split("</div>")[0]
-    assert "1 done" in summary and "1 pending" in summary
-    assert "33% complete" in summary
+    assert "1 done" in summary and "2 pending" in summary and "0 need review" in summary
+    assert "complete" not in summary
 
 
 def test_review_table_prefers_body_link_and_has_done_action(tmp_path, monkeypatch):
@@ -221,6 +233,48 @@ def test_review_table_prefers_body_link_and_has_done_action(tmp_path, monkeypatc
     # A done action that marks the entry complete.
     assert "/done?id=rev1" in review_section
     assert "<th>Done</th>" in review_section
+
+
+def test_done_list_collapses_after_ten(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    records = []
+    for i in range(12):
+        record = make_record(f"d{i:02d}", subject=f"Done {i:02d}")
+        record.status = "done"
+        # i=0 is newest; i=11 oldest.
+        record.completedAt = (now - timedelta(hours=i)).isoformat()
+        records.append(record)
+    state = load_state()
+    state.done = records
+    save_state(state)
+
+    html = write_report().read_text(encoding="utf-8")
+    done_section = html.split("Unsubscribed")[1]
+    lead, expander = done_section.split("<details", 1)
+
+    # The 10 newest render in the lead table; the 2 oldest hide behind See all.
+    assert "Done 00" in lead and "Done 09" in lead
+    assert "Done 10" not in lead and "Done 11" not in lead
+    assert "See all 12 unsubscribed" in expander
+    assert "Done 10" in expander and "Done 11" in expander
+
+
+def test_report_timestamps_use_date_time_ampm(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    record = make_record("d1", subject="Done One")
+    record.status = "done"
+    record.completedAt = now.isoformat()
+    state = load_state()
+    state.done = [record]
+    save_state(state)
+
+    html = write_report().read_text(encoding="utf-8")
+
+    # Updated line and table cells render MM-DD-YYYY HH:MM am/pm (local time).
+    assert re.search(r"Updated \d\d-\d\d-\d\d\d\d \d\d:\d\d [ap]m", html)
+    assert len(re.findall(r"\d\d-\d\d-\d\d\d\d \d\d:\d\d [ap]m", html)) >= 2
 
 
 def test_markdown_files_contain_machine_json_block(tmp_path, monkeypatch):

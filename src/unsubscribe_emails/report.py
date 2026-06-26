@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone, datetime
+from datetime import timezone, datetime
 from html import escape
 from pathlib import Path
 from urllib.parse import quote
@@ -12,46 +12,38 @@ from .timeutil import parse_iso
 REPORT_PATH = Path("unsubscribe-report.html")
 
 
-def _fmt_date(iso: str | None) -> str:
+def _fmt_datetime(iso: str | None) -> str:
     if not iso:
         return ""
-    return parse_iso(iso).strftime("%m-%d-%Y")
+    dt = parse_iso(iso).astimezone()  # UTC -> local
+    return dt.strftime("%m-%d-%Y %I:%M ") + dt.strftime("%p").lower()
 
 
 def write_report(path: Path = REPORT_PATH) -> Path:
     state = load_state()
     now = datetime.now(timezone.utc)
-    recent_cutoff = now - timedelta(days=7)
-    recent_done = [
-        record
-        for record in state.done
-        if parse_iso(record.completedAt or record.lastModified) >= recent_cutoff
-    ]
-    recent_done.sort(key=lambda record: parse_iso(record.completedAt or record.lastModified), reverse=True)
     review = sorted(state.review, key=lambda record: parse_iso(record.reviewedAt or record.lastModified), reverse=True)
-    recent_done_ids = {r.id for r in recent_done}
-    archive_done = [r for r in state.done if r.id not in recent_done_ids]
-    done = sorted(archive_done, key=lambda record: parse_iso(record.completedAt or record.lastModified), reverse=True)
-    # Pending: todo entries that have already failed at least once but have not
-    # yet reached the review threshold. These are real, in-flight failures and
-    # must be visible so the report does not imply a 100% success rate.
+    done = sorted(
+        state.done,
+        key=lambda record: parse_iso(record.completedAt or record.lastModified),
+        reverse=True,
+    )
+    # Pending: the whole todo queue — both entries that have already failed and
+    # those not yet tried. Showing all of them keeps the report honest about
+    # what is still outstanding.
     pending = sorted(
-        (record for record in state.todo if record.attempts >= 1 or record.lastError),
+        state.todo,
         key=lambda record: parse_iso(record.lastModified),
         reverse=True,
     )
     ignored = sorted(state.ignored_senders)
 
-    done_count = len(state.done)
-    pending_count = len(pending)
     review_count = len(state.review)
-    todo_fresh = len(state.todo) - pending_count
-    total = done_count + pending_count + review_count + todo_fresh
-    success_pct = round(100 * done_count / total) if total else 0
+    pending_count = len(state.todo)
+    done_count = len(state.done)
     summary = (
-        f"{done_count} done &middot; {pending_count} pending &middot; "
-        f"{review_count} need review &middot; {todo_fresh} not yet tried "
-        f"&mdash; {success_pct}% complete"
+        f"{review_count} need review &middot; {pending_count} pending "
+        f"&middot; {done_count} done"
     )
 
     html = f"""<!doctype html>
@@ -152,28 +144,30 @@ def write_report(path: Path = REPORT_PATH) -> Path:
       max-width: 360px;
       font-size: 13px;
     }}
+    .see-all summary {{
+      margin: 10px 0 0;
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 14px;
+    }}
   </style>
 </head>
 <body>
   <main>
     <h1>Auto-Unsubscribe Report</h1>
-    <div class="updated">Updated {escape(now.isoformat(timespec="seconds"))}</div>
+    <div class="updated">Updated {escape(_fmt_datetime(now.isoformat()))}</div>
     <div class="summary">{summary}</div>
-    <section>
-      <h2>Unsubscribed 😎</h2>
-      {_recent_done_table(recent_done)}
-    </section>
-    <section>
-      <h2>Pending / Retrying ⏳</h2>
-      {_pending_table(pending)}
-    </section>
     <section>
       <h2>Needs Manual Review 🤖</h2>
       {_review_table(review)}
     </section>
     <section>
-      <h2>Unsubscription Archive 💀</h2>
-      {_archive_table(done)}
+      <h2>Pending ⏳</h2>
+      {_pending_table(pending)}
+    </section>
+    <section>
+      <h2>Unsubscribed 😎</h2>
+      {_done_table(done)}
     </section>
     <section>
       <h2>Ignored</h2>
@@ -187,20 +181,29 @@ def write_report(path: Path = REPORT_PATH) -> Path:
     return path
 
 
-def _recent_done_table(records: list[UnsubscribeRecord]) -> str:
+def _done_row(record: UnsubscribeRecord) -> str:
+    return (
+        "<tr>"
+        f"<td>{escape(_fmt_datetime(record.completedAt or record.lastModified))}</td>"
+        f"<td>{escape(record.senderName or record.senderEmail)}</td>"
+        f'<td class="subject">{escape(record.subject)}</td>'
+        "</tr>"
+    )
+
+
+def _done_table(records: list[UnsubscribeRecord]) -> str:
     if not records:
-        return '<div class="empty">No successful unsubscriptions in the last 7 days.</div>'
-    rows = ["<table><thead><tr><th>Completed</th><th>Sender</th><th>Subject</th></tr></thead><tbody>"]
-    for record in records:
-        rows.append(
-            "<tr>"
-            f"<td>{escape(_fmt_date(record.completedAt or record.lastModified))}</td>"
-            f"<td>{escape(record.senderName or record.senderEmail)}</td>"
-            f'<td class="subject">{escape(record.subject)}</td>'
-            "</tr>"
-        )
-    rows.append("</tbody></table>")
-    return "\n".join(rows)
+        return '<div class="empty">No completed unsubscriptions yet.</div>'
+    head = "<table><thead><tr><th>Completed</th><th>Sender</th><th>Subject</th></tr></thead><tbody>"
+    first = "\n".join([head, *(_done_row(r) for r in records[:10]), "</tbody></table>"])
+    if len(records) <= 10:
+        return first
+    rest = "\n".join([head, *(_done_row(r) for r in records[10:]), "</tbody></table>"])
+    return (
+        first
+        + f'<details class="see-all"><summary>See all {len(records)} '
+        f"unsubscribed</summary>{rest}</details>"
+    )
 
 
 def _link(url: str, text: str) -> str:
@@ -235,7 +238,7 @@ def _pending_table(records: list[UnsubscribeRecord]) -> str:
         why = (record.lastError or "").splitlines()[0] if record.lastError else ""
         rows.append(
             "<tr>"
-            f"<td>{escape(_fmt_date(record.lastModified))}</td>"
+            f"<td>{escape(_fmt_datetime(record.lastModified))}</td>"
             f"<td>{escape(record.senderName or record.senderEmail)}</td>"
             f'<td class="subject">{escape(record.subject)}</td>'
             f"<td>{record.attempts}</td>"
@@ -260,29 +263,13 @@ def _review_table(records: list[UnsubscribeRecord]) -> str:
         done_href = f"/done?id={quote(record.id)}"
         rows.append(
             "<tr>"
-            f"<td>{escape(_fmt_date(record.reviewedAt or record.lastModified))}</td>"
+            f"<td>{escape(_fmt_datetime(record.reviewedAt or record.lastModified))}</td>"
             f"<td>{escape(record.senderName or sender)}</td>"
             f'<td class="subject">{escape(record.subject)}</td>'
             f'<td><a href="{escape(record.gmailUrl, quote=True)}" target="_blank" rel="noreferrer">view email</a></td>'
             f"<td>{_unsubscribe_cell(record)}</td>"
             f'<td><a href="{ignore_href}">ignore</a></td>'
             f'<td><a href="{done_href}">done</a></td>'
-            "</tr>"
-        )
-    rows.append("</tbody></table>")
-    return "\n".join(rows)
-
-
-def _archive_table(records: list[UnsubscribeRecord]) -> str:
-    if not records:
-        return '<div class="empty">No completed unsubscriptions yet.</div>'
-    rows = ["<table><thead><tr><th>Completed</th><th>Sender</th><th>Subject</th></tr></thead><tbody>"]
-    for record in records:
-        rows.append(
-            "<tr>"
-            f"<td>{escape(_fmt_date(record.completedAt or record.lastModified))}</td>"
-            f"<td>{escape(record.senderName or record.senderEmail)}</td>"
-            f'<td class="subject">{escape(record.subject)}</td>'
             "</tr>"
         )
     rows.append("</tbody></table>")
