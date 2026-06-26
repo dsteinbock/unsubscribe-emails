@@ -116,7 +116,7 @@ def upsert_todo_record(record: UnsubscribeRecord) -> str:
     return result
 
 
-def next_records(limit: int) -> list[dict]:
+def next_full_records(limit: int | None = None) -> list[UnsubscribeRecord]:
     state = load_state()
     newest_by_sender: dict[str, UnsubscribeRecord] = {}
     for record in state.todo:
@@ -131,7 +131,20 @@ def next_records(limit: int) -> list[dict]:
         newest_by_sender.values(),
         key=lambda record: parse_iso(record.createdAt or record.lastModified),
     )
-    return [record.compact_for_browser() for record in records[:limit]]
+    return records if limit is None else records[:limit]
+
+
+def next_records(limit: int) -> list[dict]:
+    return [record.compact_for_browser() for record in next_full_records(limit)]
+
+
+def find_record(record_id: str) -> UnsubscribeRecord | None:
+    state = load_state()
+    for bucket in (state.todo, state.review, state.done):
+        for record in bucket:
+            if record.id == record_id:
+                return record
+    return None
 
 
 def mark_done(record_id: str) -> UnsubscribeRecord:

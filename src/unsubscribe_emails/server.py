@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -9,7 +11,9 @@ from .report import REPORT_PATH, write_report
 from .store import ignore_sender
 
 
-def run_review_server(host: str = "127.0.0.1", port: int = 8765) -> None:
+def run_review_server(
+    host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True
+) -> None:
     write_report(REPORT_PATH)
 
     class Handler(BaseHTTPRequestHandler):
@@ -53,5 +57,10 @@ def run_review_server(host: str = "127.0.0.1", port: int = 8765) -> None:
             self.wfile.write(content)
 
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"Review server running at http://{host}:{port}")
+    url = f"http://{host}:{port}"
+    print(f"Review server running at {url}")
+    if open_browser:
+        # Pop open a visible browser window once the server is actually serving.
+        # A short delay avoids racing serve_forever() startup.
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     server.serve_forever()
