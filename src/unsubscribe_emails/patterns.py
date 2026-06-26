@@ -111,7 +111,8 @@ CLICK_PRIORITIES: tuple[tuple[str, re.Pattern[str], bool], ...] = (
     (
         "unsubscribe_all",
         re.compile(
-            r"unsubscribe from all|unsubscribe all|opt out of all|stop all email|remove me from all",
+            r"unsubscribe from all|unsubscribe all|opt out of all|stop all email"
+            r"|remove me from all|(from|of) all (mailing )?(lists?|emails?)",
             re.IGNORECASE,
         ),
         False,
@@ -119,7 +120,8 @@ CLICK_PRIORITIES: tuple[tuple[str, re.Pattern[str], bool], ...] = (
     (
         "unsubscribe",
         re.compile(
-            r"unsubscrib|opt[\s-]?out|remove me|stop (all )?emails?|no longer (wish to )?receive",
+            r"unsubscrib|opt[\s-]?out|remove me|take me off|stop (all )?emails?"
+            r"|no longer (wish to )?receive",
             re.IGNORECASE,
         ),
         False,

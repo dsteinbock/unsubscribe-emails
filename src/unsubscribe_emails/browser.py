@@ -38,9 +38,35 @@ OUTCOME_DONE = "done"
 OUTCOME_RETRY = "retry"
 OUTCOME_NEEDS_AGENT = "needs_agent"
 
+# How actionable each outcome is, used to pick the better of the primary vs.
+# body-fallback attempt: a succeeded page beats one a human/agent can finish,
+# which beats a dead/errored page.
+_OUTCOME_RANK = {OUTCOME_RETRY: 0, OUTCOME_NEEDS_AGENT: 1, OUTCOME_DONE: 2}
+
+
+def _outcome_rank(outcome: str) -> int:
+    return _OUTCOME_RANK.get(outcome, 0)
+
 # Roles we enumerate as candidates and the max we keep per role.
 ENUMERATED_ROLES = ("button", "link", "checkbox", "radio", "textbox")
 MAX_PER_ROLE = 40
+
+# Resolve a form control's visible label via its associated <label> element(s)
+# or aria-labelledby, since the control node itself often has no inner text.
+_LABEL_TEXT_JS = """
+el => {
+  if (el.labels && el.labels.length) {
+    return Array.from(el.labels).map(l => l.textContent).join(' ').trim();
+  }
+  const ref = el.getAttribute('aria-labelledby');
+  if (ref) {
+    return ref.split(/\\s+/)
+      .map(id => { const n = el.ownerDocument.getElementById(id); return n ? n.textContent : ''; })
+      .join(' ').trim();
+  }
+  return '';
+}
+"""
 
 
 @dataclass
@@ -351,6 +377,11 @@ class BrowserWorker:
     def _accessible_name(self, item) -> str:
         getters = (
             lambda: item.get_attribute("aria-label"),
+            # A checkbox/radio/textbox usually carries its visible text in an
+            # associated <label> (or aria-labelledby), not its own node. Without
+            # this, controls like "Unsubscribe from all" / "Opt out" come back
+            # nameless and no decision pattern can match them.
+            lambda: item.evaluate(_LABEL_TEXT_JS, timeout=1000),
             lambda: item.inner_text(timeout=1000),
             lambda: item.get_attribute("placeholder"),
             lambda: item.get_attribute("value"),
@@ -373,7 +404,24 @@ class BrowserWorker:
         elif action["type"] == "check":
             locator.check(timeout=self.settle_timeout)
         else:
-            locator.click(timeout=self.settle_timeout)
+            self._click(page, locator)
+
+    def _click(self, page, locator) -> None:
+        """Click, waiting for a form-submit navigation if one is triggered.
+
+        Many unsubscribe buttons are ``<button type="submit">`` that navigate to
+        a confirmation page. A plain click + ``_settle`` races: the load states
+        are already satisfied by the stale pre-submit page, so the re-read misses
+        the confirmation. ``expect_navigation`` blocks until the new document
+        commits; if the click instead fires an in-place AJAX update (no
+        navigation), it times out cheaply and we fall back to the normal settle.
+        """
+        nav_wait = min(self.settle_timeout, 4000)
+        try:
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=nav_wait):
+                locator.click(timeout=self.settle_timeout)
+        except Exception:  # noqa: BLE001 - no navigation (AJAX click) or already navigated
+            pass
 
 
 def run_queue(
@@ -435,12 +483,18 @@ def run_queue(
                 summary["processed"] += 1
                 result = worker.process_record(record.unsubscribeUrl, record.recipientEmail)
                 # Fallback: if the header link did not succeed, try the unsubscribe
-                # link found in the email body (a different URL) before giving up.
+                # link found in the email body (a different URL). The header link
+                # often 405s / errors while the body link lands on a real
+                # unsubscribe form, so take the fallback whenever it is *more
+                # actionable* than the primary (done > needs-agent > retry) — not
+                # only when it fully succeeds. Otherwise an actionable body page
+                # gets buried under the primary's dead-page error and never
+                # reaches the agent.
                 if result.outcome != OUTCOME_DONE and record.unsubscribeUrlFallback:
                     fallback = worker.process_record(
                         record.unsubscribeUrlFallback, record.recipientEmail
                     )
-                    if fallback.outcome == OUTCOME_DONE:
+                    if _outcome_rank(fallback.outcome) > _outcome_rank(result.outcome):
                         result = fallback
                 if result.outcome == OUTCOME_DONE:
                     mark_done(record.id)
@@ -453,6 +507,9 @@ def run_queue(
                     summary["needsAgentEntries"].append(
                         {
                             **record.compact_for_browser(),
+                            # The page the agent should open is the one the worker
+                            # actually landed on (may be the body fallback URL).
+                            "browseUrl": result.url or record.unsubscribeUrl,
                             "reason": result.reason,
                             "pageTitle": result.title,
                             "pageSnippet": result.snippet,

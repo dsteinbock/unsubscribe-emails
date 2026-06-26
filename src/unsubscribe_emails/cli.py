@@ -84,6 +84,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_false",
         help="Do not auto-open a browser window (default: open one)",
     )
+    server.add_argument(
+        "--lifetime-hours",
+        type=float,
+        default=8.0,
+        help="Auto-shut down after this many hours (0 = run until stopped; default: 8)",
+    )
 
     ignore = subparsers.add_parser("ignore-sender", help="Add a sender to ignored-senders.md")
     ignore.add_argument("sender_email")
@@ -164,7 +170,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "review-server":
-        run_review_server(host=args.host, port=args.port, open_browser=args.open_browser)
+        run_review_server(
+            host=args.host,
+            port=args.port,
+            open_browser=args.open_browser,
+            lifetime_hours=args.lifetime_hours,
+        )
         return 0
 
     if args.command == "ignore-sender":
