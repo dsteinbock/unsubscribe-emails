@@ -32,7 +32,9 @@ This labels eligible Gmail messages and writes them to `unsubscribe-todo.md`. Do
 uv run unsubscribe run
 ```
 
-Run this in the **foreground** and wait for it to finish — it may take a minute or two while the browser works through the queue. **Do not run it in the background** (no trailing `&`, no background-task option); just let it complete and read the JSON it prints.
+Run this in the **foreground** and wait for it to finish — it may take a minute or two while the browser works through the queue. A long pause with no output is **normal and expected**; just let the call block until it returns.
+
+**Do not background this command or watch it indirectly.** Specifically: no trailing `&`, no "run in background" task option, no `Monitor`, no `tail -f`, no reading a partial task-output file, no `sleep`-and-poll. Those paths reliably waste turns here (you end up reading a half-written file and misreporting the result). Issue the single foreground command above and read the JSON it prints when it returns. This is the only reliable way to get the complete summary.
 
 This unsubscribes the easy majority automatically (no browser, no tokens) and prints a JSON summary like:
 
@@ -56,16 +58,19 @@ Do this once per item in `needsAgentEntries`. Each item looks like:
 ```json
 { "id": "<entry-id>", "senderName": "...", "subject": "...",
   "recipientEmail": "you@example.com", "unsubscribeUrl": "https://...",
+  "browseUrl": "https://...the live page to open...",
   "reason": "no deterministic action matched",
   "pageTitle": "...", "pageSnippet": "first 500 chars of visible text",
   "candidates": [ {"id": "button:0", "role": "button", "name": "Update Preferences", "checked": false, "value": ""} ] }
 ```
 
+**Always open `browseUrl`, not `unsubscribeUrl`.** `browseUrl` is the exact page the worker landed on — often the email's body unsubscribe link, used because the header link 405'd or errored. Pass it with `--url`.
+
 **Drive the browser with the `browse` command** — `uv run unsubscribe browse` opens the page headlessly with Playwright (already installed) and prints just the page state as JSON: `{ "title", "snippet", "candidates", "success" }`. This is the most token-cheap and reliable option — use it instead of any MCP/extension browser tool. Each call is one shot: it navigates, performs the actions you pass, then re-reads the page.
 
-- **Inspect a page:** `uv run unsubscribe browse <entry-id>`
+- **Inspect a page:** `uv run unsubscribe browse <entry-id> --url "<browseUrl>"`
 - **Act on it (actions run in order: fill, then checks, then clicks):**
-  `uv run unsubscribe browse <entry-id> --fill-email --check "<name>" --click "<name>"`
+  `uv run unsubscribe browse <entry-id> --url "<browseUrl>" --fill-email --check "<name>" --click "<name>"`
   - `--fill-email` types the entry's recipient into the email field.
   - `--check "Unsubscribe from all"` ticks a checkbox/radio by name.
   - `--click "Unsubscribe"` clicks a button/link by name (names match the `candidates[].name` values).
@@ -73,7 +78,7 @@ Do this once per item in `needsAgentEntries`. Each item looks like:
 
 **For each entry, follow this procedure exactly:**
 
-1. Run `browse <entry-id>` to read `title`, `snippet`, and `candidates`.
+1. Run `browse <entry-id> --url "<browseUrl>"` to read `title`, `snippet`, and `candidates`.
 2. Decide using the **first** rule that matches:
    - **Already done** — `"success": true`, or the snippet says you're unsubscribed → run `mark-done`. Done with this entry.
    - **Stop — do not touch** — snippet mentions delete/close account, billing, payment, password, two-factor/2FA, a CAPTCHA, or asks you to log in → run `mark-retry` with a reason describing the blocker. Done.
