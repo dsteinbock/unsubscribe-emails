@@ -1,0 +1,8 @@
+# Optional. The first matching address in To/Cc-like recipient headers wins.
+known_recipient_emails = [
+  "you@example.com",
+]
+
+[gmail]
+source_label = "@SaneBlackHole"
+processed_label = "#auto-unsubscribe"

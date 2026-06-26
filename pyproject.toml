@@ -1,0 +1,26 @@
+[project]
+name = "unsubscribe-emails"
+version = "0.1.0"
+description = "Programmatic Gmail auto-unsubscribe workflow with agentic browser handoff."
+requires-python = ">=3.12"
+dependencies = [
+  "beautifulsoup4>=4.12.0",
+  "google-api-python-client>=2.130.0",
+  "google-auth-oauthlib>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+unsubscribe = "unsubscribe_emails.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
