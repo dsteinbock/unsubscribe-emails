@@ -90,6 +90,7 @@ def test_next_records_prints_compact_browser_payload(tmp_path, monkeypatch):
             "recipientEmail": "me@example.com",
             "gmailUrl": "https://mail.google.com/mail/u/0/#all/thread-m1",
             "unsubscribeUrl": "https://example.com/unsubscribe",
+            "unsubscribeUrlFallback": None,
             "attempts": 0,
         }
     ]

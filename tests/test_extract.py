@@ -31,6 +31,60 @@ def test_parse_headers_and_prefer_known_recipient():
     assert record.unsubscribeSource == "list-unsubscribe"
 
 
+def test_one_click_flag_set_only_with_post_header_and_url():
+    message = EmailMessage()
+    message["From"] = "Sender <sender@example.com>"
+    message["To"] = "me@example.com"
+    message["List-Unsubscribe"] = "<https://example.com/unsub?id=1>"
+    message["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    message.set_content("Hello")
+
+    record = build_record_from_message("m1", "t1", message)
+    assert record.oneClick is True
+
+
+def test_one_click_flag_false_without_post_header():
+    message = EmailMessage()
+    message["From"] = "Sender <sender@example.com>"
+    message["To"] = "me@example.com"
+    message["List-Unsubscribe"] = "<https://example.com/unsub?id=1>"
+    message.set_content("Hello")
+
+    record = build_record_from_message("m1", "t1", message)
+    assert record.oneClick is False
+
+
+def test_body_fallback_set_when_body_link_differs_from_header():
+    message = EmailMessage()
+    message["From"] = "Sender <sender@example.com>"
+    message["To"] = "me@example.com"
+    message["List-Unsubscribe"] = "<https://esp.example.com/header-unsub?id=1>"
+    message.set_content("plain text")
+    message.add_alternative(
+        '<html><body><a href="https://esp.example.com/body-unsub?id=1">Unsubscribe</a>'
+        "</body></html>",
+        subtype="html",
+    )
+
+    record = build_record_from_message("m1", "t1", message)
+
+    assert record.unsubscribeUrl == "https://esp.example.com/header-unsub?id=1"
+    assert record.unsubscribeUrlFallback == "https://esp.example.com/body-unsub?id=1"
+
+
+def test_body_fallback_none_when_only_header_present():
+    message = EmailMessage()
+    message["From"] = "Sender <sender@example.com>"
+    message["To"] = "me@example.com"
+    message["List-Unsubscribe"] = "<https://esp.example.com/header-unsub?id=1>"
+    message.set_content("No links in this body at all.")
+
+    record = build_record_from_message("m1", "t1", message)
+
+    assert record.unsubscribeUrl == "https://esp.example.com/header-unsub?id=1"
+    assert record.unsubscribeUrlFallback is None
+
+
 def test_parse_list_unsubscribe_keeps_mailto_when_no_url():
     url, mailto = parse_list_unsubscribe("<mailto:unsubscribe@example.com?subject=remove>")
 
