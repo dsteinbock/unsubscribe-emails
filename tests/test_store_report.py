@@ -168,6 +168,61 @@ def test_report_filters_recent_done_and_includes_review_links(tmp_path, monkeypa
     assert html.index("a@example.com") < html.index("z@example.com")
 
 
+def test_report_shows_pending_retries_and_honest_summary(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    done = make_record("done1", subject="Done One")
+    done.status = "done"
+    done.completedAt = now.isoformat()
+    fresh = make_record("fresh1", sender="fresh@example.com", subject="Fresh One")
+    retrying = make_record("retry1", sender="retry@example.com", subject="Retry One")
+    retrying.attempts = 1
+    retrying.lastError = "page returned HTTP 405\nCall log: ..."
+    state = load_state()
+    state.done = [done]
+    state.todo = [fresh, retrying]
+    save_state(state)
+
+    html = write_report().read_text(encoding="utf-8")
+
+    pending_section = html.split("Pending / Retrying")[1].split("</section>")[0]
+    assert "Retry One" in pending_section
+    # Only the first line of the error is shown, and fresh (untried) rows stay out.
+    assert "page returned HTTP 405" in pending_section
+    assert "Call log" not in pending_section
+    assert "Fresh One" not in pending_section
+    # Summary reflects the true split: 1 done / 1 pending / 1 untried -> 33%.
+    summary = html.split('class="summary">')[1].split("</div>")[0]
+    assert "1 done" in summary and "1 pending" in summary
+    assert "33% complete" in summary
+
+
+def test_review_table_prefers_body_link_and_has_done_action(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    review = make_record("rev1", subject="Needs Help")
+    review.status = "review"
+    review.attempts = 3
+    review.reviewedAt = now.isoformat()
+    review.unsubscribeUrl = "https://esp.example.com/header-unsub?id=1"
+    review.unsubscribeUrlFallback = "https://esp.example.com/body-unsub?id=1"
+    state = load_state()
+    state.review = [review]
+    save_state(state)
+
+    html = write_report().read_text(encoding="utf-8")
+    review_section = html.split("Needs Manual Review")[1]
+
+    # The body link (the one that actually loads) is surfaced as primary, with
+    # the dead header link kept as a labelled secondary.
+    assert "https://esp.example.com/body-unsub?id=1" in review_section
+    assert "unsubscribe (body)" in review_section
+    assert ">header<" in review_section
+    # A done action that marks the entry complete.
+    assert "/done?id=rev1" in review_section
+    assert "<th>Done</th>" in review_section
+
+
 def test_markdown_files_contain_machine_json_block(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     state = load_state()

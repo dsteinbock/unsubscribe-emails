@@ -6,6 +6,7 @@ from unsubscribe_emails import browser
 from unsubscribe_emails.browser import (
     OUTCOME_DONE,
     OUTCOME_NEEDS_AGENT,
+    OUTCOME_RETRY,
     WorkerResult,
     decide_action,
     run_queue,
@@ -106,6 +107,31 @@ def test_decide_action_checks_unsubscribe_all_checkbox():
     candidates = [candidate("checkbox", "Unsubscribe from all emails", 0, checked=False)]
     action = decide_action(candidates, "Manage your subscription preferences", None, False)
     assert action["type"] == "check"
+
+
+def test_decide_action_checks_from_all_mailing_lists_phrasings():
+    # Real labels from the Haiku run that the old "unsubscribe from all"
+    # pattern missed because of the intervening word / "emails" vs "lists".
+    for name in ("Unsubscribe me from all mailing lists", "Opt out from all emails"):
+        action = decide_action(
+            [candidate("checkbox", name, 0, checked=False)],
+            "Email preferences",
+            None,
+            False,
+        )
+        assert action["type"] == "check", name
+        assert action["label"] == "unsubscribe_all", name
+
+
+def test_decide_action_selects_take_me_off_radio():
+    # Real Included Health preference center: an unusually phrased opt-out radio.
+    candidates = [
+        candidate("radio", "Keep sending all emails", 0, checked=True),
+        candidate("radio", "Take me off the list", 1, checked=False),
+    ]
+    action = decide_action(candidates, "Let us know your email preferences", None, False)
+    assert action["type"] == "check"
+    assert action["candidate"]["id"] == "radio:1"
 
 
 def test_decide_action_does_not_press_bare_submit_without_context():
@@ -261,6 +287,51 @@ def test_run_queue_uses_body_fallback_when_primary_fails(tmp_path, monkeypatch):
     assert summary["autoDone"] == 1
     assert summary["needsAgent"] == 0
     assert {r.id for r in load_state().done} == {"m1"}
+
+
+class _ActionableFallbackWorker:
+    """Primary URL errors (retry); the body fallback lands on an agent page."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def process_record(self, url, recipient_email):
+        if "/fallback/" in url:
+            return WorkerResult(
+                OUTCOME_NEEDS_AGENT,
+                "ambiguous",
+                "body form needs agent",
+                url=url,
+                candidates=[candidate("button", "Unsubscribe", 0)],
+            )
+        return WorkerResult(OUTCOME_RETRY, "http_error", "page returned HTTP 405", url=url)
+
+
+def test_run_queue_escalates_actionable_fallback_instead_of_burying_primary_error(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(browser, "BrowserWorker", _ActionableFallbackWorker)
+    state = load_state()
+    state.todo = [
+        _todo_record("m1", sender="s1", fallback="https://example.com/fallback/m1")
+    ]
+    save_state(state)
+
+    summary = run_queue()
+
+    # The 405 primary must not bury the actionable body page: it goes to the agent.
+    assert summary["needsAgent"] == 1
+    assert summary["autoRetry"] == 0
+    entry = summary["needsAgentEntries"][0]
+    assert entry["browseUrl"] == "https://example.com/fallback/m1"
+    assert entry["reason"] == "body form needs agent"
 
 
 def test_run_queue_resolves_one_click_without_browser(tmp_path, monkeypatch):
